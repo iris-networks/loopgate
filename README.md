@@ -9,6 +9,26 @@ Loopgate is a high-performance, Golang-based MCP server that bridges AI agents a
 ![MCP Version](https://img.shields.io/badge/MCP-2.0-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
+## 📋 Table of Contents
+
+- [🎯 Why Loopgate?](#-why-loopgate)
+- [⚡ Quick Start](#-quick-start)
+- [🌟 Key Features](#-key-features)
+- [💡 Use Cases](#-use-cases)
+- [🛠️ Architecture](#️-architecture)
+- [📡 API Reference](#-api-reference)
+- [🔧 Configuration](#-configuration)
+- [📚 Client SDKs](#-client-sdks)
+- [🧪 Integration Examples](#-integration-examples)
+- [🚀 Production Deployment](#-production-deployment)
+- [📊 Monitoring and Observability](#-monitoring-and-observability)
+- [🔒 Security Considerations](#-security-considerations)
+- [🧪 Testing](#-testing)
+- [🤝 Contributing](#-contributing)
+- [📚 Documentation](#-documentation)
+- [📄 License](#-license)
+- [🆘 Support](#-support)
+
 ## 🎯 Why Loopgate?
 
 In a world driven by automation, human wisdom remains essential. Loopgate enables AI agents to pause for human input, ensuring confidence in high-stakes decisions, compliance, or complex workflows.
@@ -532,6 +552,78 @@ def claude_with_loopgate():
     
     # Claude will automatically call request_human_approval for this sensitive operation
     return message
+```
+
+### Vercel AI SDK Integration
+```typescript
+import { tool } from 'ai';
+import { z } from 'zod';
+
+// Register the human approval tool
+export const requestHumanApproval = tool({
+  description: 'Request human approval for sensitive actions via Telegram',
+  parameters: z.object({
+    message: z.string().describe('The approval request message'),
+    options: z.array(z.string()).optional().describe('Response options for the human'),
+    session_id: z.string().optional().describe('Session identifier'),
+    client_id: z.string().optional().describe('Client identifier'),
+    metadata: z.record(z.any()).optional().describe('Additional context')
+  }),
+  execute: async ({ message, options = [], session_id = 'vercel-ai-session', client_id = 'vercel-ai-agent', metadata = {} }) => {
+    // 1. Register session (if not already done)
+    await fetch('http://localhost:8080/sessions/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id,
+        client_id,
+        telegram_id: 123456789 // Your Telegram ID
+      })
+    });
+
+    // 2. Submit HITL request
+    const response = await fetch('http://localhost:8080/hitl/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id,
+        client_id,
+        message,
+        options,
+        metadata
+      })
+    });
+
+    const { request_id } = await response.json();
+
+    // 3. Poll for human response
+    while (true) {
+      const pollResp = await fetch(`http://localhost:8080/hitl/poll?request_id=${request_id}`);
+      const status = await pollResp.json();
+      
+      if (status.completed) {
+        return {
+          approved: status.response,
+          metadata: status.metadata,
+          timestamp: status.timestamp
+        };
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  }
+});
+
+// Usage in your Vercel AI SDK app
+import { generateObject } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+const result = await generateObject({
+  model: openai('gpt-4'),
+  tools: { requestHumanApproval },
+  prompt: 'Deploy the new version to production',
+  toolChoice: 'auto'
+});
 ```
 
 ## 🚀 Production Deployment
