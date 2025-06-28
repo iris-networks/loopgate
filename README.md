@@ -16,7 +16,7 @@ Loopgate is a high-performance, Golang-based MCP server that bridges AI agents a
 - [🌟 Key Features](#-key-features)
 - [💡 Use Cases](#-use-cases)
 - [🛠️ Architecture](#️-architecture)
-- [📡 API Reference](api.md)
+- [📡 API Reference](docs/API.md)
 - [🔧 Configuration](#-configuration)
 - [📚 Client SDKs](#-client-sdks)
 - [🧪 Integration Examples](#-integration-examples)
@@ -220,7 +220,7 @@ Loopgate implements a robust, event-driven architecture:
 
 ## 📡 API Reference
 
-See [API Reference](api.md) for detailed documentation of MCP tools and HTTP endpoints.
+See [API Reference](docs/API.md) for detailed documentation of MCP tools and HTTP endpoints.
 
 ## 🔧 Configuration
 
