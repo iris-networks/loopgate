@@ -27,7 +27,7 @@ graph LR
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/loopgate.git
+git clone https://github.com/iris-networks/loopgate
 cd loopgate
 
 # Build the server
