@@ -41,6 +41,12 @@ graph LR
     B -->|Response| A
 ```
 
+## 🎬 Demo
+
+![Loopgate HITL Demo](hitl-demo.gif)
+
+*See Loopgate in action: AI agent requests human approval via Telegram, human responds, and the agent receives the decision in real-time.*
+
 ## ⚡ Quick Start
 
 ### 1. Setup

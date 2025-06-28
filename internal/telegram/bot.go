@@ -190,8 +190,10 @@ func (b *Bot) handleReply(message *tgbotapi.Message) {
 
 func (b *Bot) handleCallbackQuery(query *tgbotapi.CallbackQuery) {
 	data := query.Data
+	log.Printf("Received callback query from user %d: %s", query.From.ID, data)
 	
 	if !strings.HasPrefix(data, "response:") {
+		log.Printf("Ignoring non-response callback: %s", data)
 		return
 	}
 
@@ -222,11 +224,16 @@ func (b *Bot) handleCallbackQuery(query *tgbotapi.CallbackQuery) {
 	           strings.ToLower(selectedOption) != "reject" &&
 	           strings.ToLower(selectedOption) != "deny"
 
+	log.Printf("Processing response for request %s: option='%s', approved=%t", requestID, selectedOption, approved)
+
 	err = b.sessionManager.UpdateRequestResponse(requestID, selectedOption, approved)
 	if err != nil {
+		log.Printf("Error updating request %s: %v", requestID, err)
 		b.answerCallbackQuery(query.ID, "Error updating request")
 		return
 	}
+
+	log.Printf("Successfully updated request %s with response: %s", requestID, selectedOption)
 
 	b.answerCallbackQuery(query.ID, fmt.Sprintf("Selected: %s", selectedOption))
 	
