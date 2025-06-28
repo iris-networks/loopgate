@@ -647,10 +647,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🌟 Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=your-username/loopgate&type=Date)](https://star-history.com/#your-username/loopgate&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=iris-networks/loopgate&type=Date)](https://star-history.com/#iris-networks/loopgate&Date)
 
 ---
 
 **Loopgate: Where AI meets human wisdom for smarter, safer automation.**
 
-*Made with ❤️ by the Loopgate team*
+*Made with ❤️ by the Iris team*
