@@ -1,38 +1,42 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"strconv"
 )
 
 type Config struct {
-	TelegramBotToken string
-	ServerPort       int
-	LogLevel         string
+	TelegramBotToken      string
+	ServerPort           string
+	LogLevel             string
+	RequestTimeout       int
+	MaxConcurrentRequests int
 }
 
-func Load() (*Config, error) {
+func Load() *Config {
 	cfg := &Config{
-		ServerPort: 8080,
-		LogLevel:   "info",
+		TelegramBotToken:      getEnv("TELEGRAM_BOT_TOKEN", ""),
+		ServerPort:           getEnv("SERVER_PORT", "8080"),
+		LogLevel:             getEnv("LOG_LEVEL", "info"),
+		RequestTimeout:       getEnvInt("REQUEST_TIMEOUT", 300),
+		MaxConcurrentRequests: getEnvInt("MAX_CONCURRENT_REQUESTS", 100),
 	}
 
-	if token := os.Getenv("TELEGRAM_BOT_TOKEN"); token != "" {
-		cfg.TelegramBotToken = token
-	} else {
-		return nil, fmt.Errorf("TELEGRAM_BOT_TOKEN environment variable is required")
-	}
+	return cfg
+}
 
-	if port := os.Getenv("SERVER_PORT"); port != "" {
-		if p, err := strconv.Atoi(port); err == nil {
-			cfg.ServerPort = p
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+func getEnvInt(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if intVal, err := strconv.Atoi(value); err == nil {
+			return intVal
 		}
 	}
-
-	if level := os.Getenv("LOG_LEVEL"); level != "" {
-		cfg.LogLevel = level
-	}
-
-	return cfg, nil
+	return defaultValue
 }

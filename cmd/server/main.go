@@ -1,93 +1,68 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"log"
-	"net/http"
-	"os"
-	"os/signal"
-	"strings"
-	"syscall"
-
 	"loopgate/config"
 	"loopgate/internal/handlers"
 	"loopgate/internal/mcp"
 	"loopgate/internal/router"
 	"loopgate/internal/session"
 	"loopgate/internal/telegram"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
 func main() {
-	log.Println("Starting Loopgate MCP Server...")
+	cfg := config.Load()
 
-	cfg, err := config.Load()
+	if cfg.TelegramBotToken == "" {
+		log.Fatal("TELEGRAM_BOT_TOKEN environment variable is required")
+	}
+
+	sessionManager := session.NewManager()
+
+	telegramBot, err := telegram.NewBot(cfg.TelegramBotToken, sessionManager)
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		log.Fatalf("Failed to create Telegram bot: %v", err)
 	}
 
-	sessionManager := session.NewManager("./data")
-	telegramBot := telegram.NewBot(cfg.TelegramBotToken)
-	messageRouter := router.NewRouter(sessionManager, telegramBot)
-	hitlHandler := handlers.NewHITLHandler(messageRouter, sessionManager)
-	mcpServer := mcp.NewMCPServer(messageRouter)
-	
-	telegramBot.SetMCPHandler(messageRouter)
+	go telegramBot.Start()
 
-	http.HandleFunc("/hitl/request", hitlHandler.HandleRequest)
-	http.HandleFunc("/hitl/register", hitlHandler.HandleSessionRegistration)
-	http.HandleFunc("/hitl/status", hitlHandler.HandleSessionStatus)
-	http.HandleFunc("/hitl/deactivate", hitlHandler.HandleSessionDeactivation)
-	http.HandleFunc("/health", hitlHandler.HandleHealth)
-	http.HandleFunc("/telegram/webhook", telegramBot.HandleWebhook)
-	http.HandleFunc("/mcp", mcpServer.HandleHTTP)
+	mcpServer := mcp.NewServer()
+	hitlHandler := handlers.NewHITLHandler(sessionManager, telegramBot)
+	appRouter := router.NewRouter(mcpServer, hitlHandler)
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{
-				"service": "Loopgate MCP Server",
-				"version": "1.0.0",
-				"status": "running",
-				"endpoints": {
-					"hitl_request": "/hitl/request",
-					"session_register": "/hitl/register", 
-					"session_status": "/hitl/status",
-					"session_deactivate": "/hitl/deactivate",
-					"health": "/health",
-					"telegram_webhook": "/telegram/webhook",
-					"mcp": "/mcp"
-				}
-			}`)
-		} else {
-			http.NotFound(w, r)
+	server := &http.Server{
+		Addr:         ":" + cfg.ServerPort,
+		Handler:      appRouter,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	go func() {
+		log.Printf("Starting HTTP server on port %s", cfg.ServerPort)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Failed to start server: %v", err)
 		}
-	})
-
-	go func() {
-		log.Println("Starting Telegram bot polling...")
-		telegramBot.StartPolling()
 	}()
 
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
 
-	go func() {
-		<-c
-		log.Println("Shutting down Loopgate MCP Server...")
-		os.Exit(0)
-	}()
+	log.Println("Shutting down server...")
 
-	serverAddr := fmt.Sprintf(":%d", cfg.ServerPort)
-	log.Printf("Loopgate MCP Server listening on %s", serverAddr)
-	log.Printf("Configuration: Log Level=%s", cfg.LogLevel)
-	
-	if strings.Contains(cfg.TelegramBotToken, "***") {
-		log.Printf("Telegram Bot Token: %s", cfg.TelegramBotToken[:10]+"***")
-	} else {
-		log.Printf("Telegram Bot Token: %s***", cfg.TelegramBotToken[:10])
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		log.Printf("Server forced to shutdown: %v", err)
 	}
 
-	if err := http.ListenAndServe(serverAddr, nil); err != nil {
-		log.Fatalf("Server failed to start: %v", err)
-	}
+	log.Println("Server exited")
 }

@@ -1,235 +1,119 @@
 package router
 
 import (
-	"fmt"
+	"encoding/json"
+	"io"
 	"log"
-	"sync"
-	"time"
+	"loopgate/internal/handlers"
+	"loopgate/internal/mcp"
+	"net/http"
 
-	"loopgate/internal/session"
-	"loopgate/internal/telegram"
-	"loopgate/internal/types"
+	"github.com/gorilla/mux"
 )
 
 type Router struct {
-	sessionManager *session.Manager
-	telegramBot    *telegram.Bot
-	pendingRequests map[string]*PendingRequest
-	mu             sync.RWMutex
+	mux         *mux.Router
+	mcpServer   *mcp.Server
+	hitlHandler *handlers.HITLHandler
 }
 
-type PendingRequest struct {
-	Request     *types.HITLRequest
-	ResponseCh  chan *types.HITLResponse
-	Timeout     time.Time
-	SessionInfo *types.Session
-}
-
-func NewRouter(sessionManager *session.Manager, telegramBot *telegram.Bot) *Router {
-	r := &Router{
-		sessionManager:  sessionManager,
-		telegramBot:     telegramBot,
-		pendingRequests: make(map[string]*PendingRequest),
+func NewRouter(mcpServer *mcp.Server, hitlHandler *handlers.HITLHandler) *Router {
+	router := &Router{
+		mux:         mux.NewRouter(),
+		mcpServer:   mcpServer,
+		hitlHandler: hitlHandler,
 	}
 
-	go r.cleanupExpiredRequests()
-	return r
+	router.setupRoutes()
+	return router
 }
 
-func (r *Router) RouteHITLRequest(req *types.HITLRequest) (*types.HITLResponse, error) {
-	session, err := r.sessionManager.GetSession(req.SessionID)
+func (r *Router) setupRoutes() {
+	r.mux.HandleFunc("/health", r.healthCheck).Methods("GET")
+	r.mux.HandleFunc("/mcp", r.handleMCP).Methods("POST")
+	r.mux.HandleFunc("/mcp/tools", r.handleMCPTools).Methods("GET")
+	r.mux.HandleFunc("/mcp/capabilities", r.handleMCPCapabilities).Methods("GET")
+
+	r.hitlHandler.RegisterRoutes(r.mux)
+
+	r.mux.Use(r.loggingMiddleware)
+	r.mux.Use(r.corsMiddleware)
+}
+
+func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	r.mux.ServeHTTP(w, req)
+}
+
+func (r *Router) healthCheck(w http.ResponseWriter, req *http.Request) {
+	response := map[string]interface{}{
+		"status":  "healthy",
+		"service": "loopgate",
+		"version": "1.0.0",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (r *Router) handleMCP(w http.ResponseWriter, req *http.Request) {
+	body, err := io.ReadAll(req.Body)
 	if err != nil {
-		return nil, fmt.Errorf("session not found: %v", err)
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
 	}
 
-	if !session.IsActive {
-		return nil, fmt.Errorf("session is not active: %s", req.SessionID)
-	}
-
-	responseCh := make(chan *types.HITLResponse, 1)
-	timeout := time.Now().Add(5 * time.Minute)
-
-	pendingReq := &PendingRequest{
-		Request:     req,
-		ResponseCh:  responseCh,
-		Timeout:     timeout,
-		SessionInfo: session,
-	}
-
-	r.mu.Lock()
-	r.pendingRequests[req.ID] = pendingReq
-	r.mu.Unlock()
-
-	if err := r.sessionManager.UpdateActivity(req.SessionID); err != nil {
-		log.Printf("Failed to update session activity: %v", err)
-	}
-
-	message := r.formatMessage(req)
-	if err := r.telegramBot.SendMessage(session.TelegramID, message, req.Options); err != nil {
-		r.mu.Lock()
-		delete(r.pendingRequests, req.ID)
-		r.mu.Unlock()
-		return nil, fmt.Errorf("failed to send telegram message: %v", err)
-	}
-
-	select {
-	case response := <-responseCh:
-		r.mu.Lock()
-		delete(r.pendingRequests, req.ID)
-		r.mu.Unlock()
-		return response, nil
-	case <-time.After(time.Until(timeout)):
-		r.mu.Lock()
-		delete(r.pendingRequests, req.ID)
-		r.mu.Unlock()
-		return nil, fmt.Errorf("request timeout for ID: %s", req.ID)
-	}
-}
-
-func (r *Router) HandleTelegramResponse(sessionID string, response *types.HITLResponse) error {
-	r.mu.RLock()
-	pendingReq, exists := r.pendingRequests[response.ID]
-	r.mu.RUnlock()
-
-	if !exists {
-		return fmt.Errorf("no pending request found for ID: %s", response.ID)
-	}
-
-	select {
-	case pendingReq.ResponseCh <- response:
-		return nil
-	default:
-		return fmt.Errorf("response channel full for request: %s", response.ID)
-	}
-}
-
-func (r *Router) HandleTelegramMessage(chatID int64, message string, callbackData string) error {
-	session, err := r.sessionManager.GetSessionByChat(chatID)
+	response, err := r.mcpServer.HandleHTTPRequest(body)
 	if err != nil {
-		return fmt.Errorf("session not found for chat %d: %v", chatID, err)
+		http.Error(w, "Failed to process MCP request", http.StatusInternalServerError)
+		return
 	}
 
-	r.mu.RLock()
-	var pendingReq *PendingRequest
-	for _, req := range r.pendingRequests {
-		if req.SessionInfo.ID == session.ID {
-			pendingReq = req
-			break
-		}
-	}
-	r.mu.RUnlock()
-
-	if pendingReq == nil {
-		return fmt.Errorf("no pending request found for session: %s", session.ID)
-	}
-
-	response := &types.HITLResponse{
-		ID:       pendingReq.Request.ID,
-		Response: message,
-		Time:     time.Now(),
-	}
-
-	if callbackData != "" {
-		response.Response = callbackData
-		if callbackData == "approve" {
-			response.Approved = true
-		} else if callbackData == "reject" {
-			response.Approved = false
-		} else {
-			response.Approved = true
-		}
-	} else {
-		response.Approved = r.parseApproval(message)
-	}
-
-	select {
-	case pendingReq.ResponseCh <- response:
-		return nil
-	default:
-		return fmt.Errorf("response channel full for request: %s", pendingReq.Request.ID)
-	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(response)
 }
 
-func (r *Router) formatMessage(req *types.HITLRequest) string {
-	message := fmt.Sprintf("🤖 *HITL Request from %s*\n\n", req.ClientID)
-	message += fmt.Sprintf("📝 *Message:* %s\n", req.Message)
-	
-	if req.Metadata != nil && len(req.Metadata) > 0 {
-		message += "\n📊 *Metadata:*\n"
-		for key, value := range req.Metadata {
-			message += fmt.Sprintf("• %s: %v\n", key, value)
-		}
+func (r *Router) handleMCPTools(w http.ResponseWriter, req *http.Request) {
+	response, err := r.mcpServer.CreateToolsListResponse()
+	if err != nil {
+		http.Error(w, "Failed to get tools list", http.StatusInternalServerError)
+		return
 	}
 
-	if len(req.Options) == 0 {
-		message += "\n💬 Please respond with your decision (yes/no, approve/reject)."
-	} else {
-		message += "\n🔘 Please select one of the options below:"
-	}
-
-	message += fmt.Sprintf("\n\n⏰ *Request ID:* `%s`", req.ID)
-	return message
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(response)
 }
 
-func (r *Router) parseApproval(message string) bool {
-	lower := fmt.Sprintf("%s", message)
-	approvals := []string{"yes", "approve", "ok", "confirm", "accept", "✅", "👍"}
-	
-	for _, approval := range approvals {
-		if lower == approval {
-			return true
-		}
-	}
-	
-	return false
-}
+func (r *Router) handleMCPCapabilities(w http.ResponseWriter, req *http.Request) {
+	capabilities := r.mcpServer.GetCapabilities()
+	serverInfo := r.mcpServer.GetServerInfo()
 
-func (r *Router) cleanupExpiredRequests() {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		now := time.Now()
-		var expired []string
-
-		r.mu.RLock()
-		for id, req := range r.pendingRequests {
-			if now.After(req.Timeout) {
-				expired = append(expired, id)
-			}
-		}
-		r.mu.RUnlock()
-
-		if len(expired) > 0 {
-			r.mu.Lock()
-			for _, id := range expired {
-				if req, exists := r.pendingRequests[id]; exists {
-					close(req.ResponseCh)
-					delete(r.pendingRequests, id)
-					log.Printf("Expired HITL request: %s", id)
-				}
-			}
-			r.mu.Unlock()
-		}
-	}
-}
-
-func (r *Router) GetPendingRequestsCount() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return len(r.pendingRequests)
-}
-
-func (r *Router) GetPendingRequestsForSession(sessionID string) []*types.HITLRequest {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	var requests []*types.HITLRequest
-	for _, req := range r.pendingRequests {
-		if req.SessionInfo.ID == sessionID {
-			requests = append(requests, req.Request)
-		}
+	response := map[string]interface{}{
+		"capabilities": capabilities,
+		"serverInfo":   serverInfo,
 	}
 
-	return requests
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (r *Router) loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		log.Printf("%s %s %s", req.Method, req.RequestURI, req.RemoteAddr)
+		next.ServeHTTP(w, req)
+	})
+}
+
+func (r *Router) corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		if req.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, req)
+	})
 }

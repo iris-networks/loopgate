@@ -4,200 +4,245 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"loopgate/internal/session"
+	"loopgate/internal/telegram"
+	"loopgate/internal/types"
 	"net/http"
 	"time"
 
-	"loopgate/internal/router"
-	"loopgate/internal/session"
-	"loopgate/internal/types"
+	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 )
 
 type HITLHandler struct {
-	router         *router.Router
 	sessionManager *session.Manager
+	telegramBot    *telegram.Bot
 }
 
-func NewHITLHandler(router *router.Router, sessionManager *session.Manager) *HITLHandler {
+func NewHITLHandler(sessionManager *session.Manager, telegramBot *telegram.Bot) *HITLHandler {
 	return &HITLHandler{
-		router:         router,
 		sessionManager: sessionManager,
+		telegramBot:    telegramBot,
 	}
 }
 
-func (h *HITLHandler) HandleRequest(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+func (h *HITLHandler) RegisterRoutes(router *mux.Router) {
+	router.HandleFunc("/hitl/register", h.RegisterSession).Methods("POST")
+	router.HandleFunc("/hitl/request", h.SubmitRequest).Methods("POST")
+	router.HandleFunc("/hitl/poll", h.PollRequest).Methods("GET")
+	router.HandleFunc("/hitl/status", h.GetStatus).Methods("GET")
+	router.HandleFunc("/hitl/deactivate", h.DeactivateSession).Methods("POST")
+	router.HandleFunc("/hitl/pending", h.ListPendingRequests).Methods("GET")
+	router.HandleFunc("/hitl/cancel", h.CancelRequest).Methods("POST")
+}
 
-	var req types.HITLRequest
+func (h *HITLHandler) RegisterSession(w http.ResponseWriter, r *http.Request) {
+	var req types.SessionRegistration
+	
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.validateRequest(&req); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
+	if req.SessionID == "" || req.ClientID == "" || req.TelegramID == 0 {
+		http.Error(w, "Missing required fields", http.StatusBadRequest)
 		return
 	}
 
-	req.Timestamp = time.Now()
-	if req.ID == "" {
-		req.ID = fmt.Sprintf("hitl_%d", time.Now().UnixNano())
-	}
-
-	log.Printf("Processing HITL request: %s from client: %s", req.ID, req.ClientID)
-
-	response, err := h.router.RouteHITLRequest(&req)
+	err := h.sessionManager.RegisterSession(req.SessionID, req.ClientID, req.TelegramID)
 	if err != nil {
-		log.Printf("Failed to route HITL request %s: %v", req.ID, err)
-		http.Error(w, fmt.Sprintf("Failed to process request: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to register session: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("HITL request %s completed with response: %s", req.ID, response.Response)
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("Failed to encode response for %s: %v", req.ID, err)
-		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-		return
-	}
-}
-
-func (h *HITLHandler) HandleSessionRegistration(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var regReq struct {
-		SessionID  string `json:"session_id"`
-		ClientID   string `json:"client_id"`
-		TelegramID int64  `json:"telegram_id"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&regReq); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	if regReq.SessionID == "" || regReq.ClientID == "" || regReq.TelegramID == 0 {
-		http.Error(w, "Missing required fields: session_id, client_id, telegram_id", http.StatusBadRequest)
-		return
-	}
-
-	if err := h.sessionManager.CreateSession(regReq.SessionID, regReq.ClientID, regReq.TelegramID); err != nil {
-		log.Printf("Failed to create session %s: %v", regReq.SessionID, err)
-		http.Error(w, fmt.Sprintf("Failed to create session: %v", err), http.StatusConflict)
-		return
-	}
-
-	log.Printf("Registered new session: %s for client: %s with Telegram ID: %d", 
-		regReq.SessionID, regReq.ClientID, regReq.TelegramID)
+	log.Printf("Registered session: %s for client: %s", req.SessionID, req.ClientID)
 
 	response := map[string]interface{}{
-		"status":     "registered",
-		"session_id": regReq.SessionID,
-		"timestamp":  time.Now(),
+		"success":    true,
+		"session_id": req.SessionID,
+		"message":    "Session registered successfully",
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
-func (h *HITLHandler) HandleSessionStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+func (h *HITLHandler) SubmitRequest(w http.ResponseWriter, r *http.Request) {
+	var req types.HITLRequest
+	
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	sessionID := r.URL.Query().Get("session_id")
-	if sessionID == "" {
-		http.Error(w, "session_id parameter is required", http.StatusBadRequest)
+	if req.SessionID == "" || req.ClientID == "" || req.Message == "" {
+		http.Error(w, "Missing required fields", http.StatusBadRequest)
 		return
 	}
 
-	session, err := h.sessionManager.GetSession(sessionID)
+	req.ID = uuid.New().String()
+	req.Status = types.RequestStatusPending
+	req.CreatedAt = time.Now()
+	
+	if req.Timeout == 0 {
+		req.Timeout = 300
+	}
+
+	if req.RequestType == "" {
+		if len(req.Options) > 0 {
+			req.RequestType = types.RequestTypeChoice
+		} else {
+			req.RequestType = types.RequestTypeInput
+		}
+	}
+
+	session, err := h.sessionManager.GetSession(req.SessionID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Session not found: %v", err), http.StatusNotFound)
 		return
 	}
 
-	pendingRequests := h.router.GetPendingRequestsForSession(sessionID)
+	if !session.Active {
+		http.Error(w, "Session is not active", http.StatusBadRequest)
+		return
+	}
+
+	h.sessionManager.StoreRequest(&req)
+
+	err = h.telegramBot.SendHITLRequest(&req)
+	if err != nil {
+		log.Printf("Failed to send telegram message: %v", err)
+		http.Error(w, "Failed to send request to Telegram", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("Submitted HITL request: %s for client: %s", req.ID, req.ClientID)
 
 	response := map[string]interface{}{
-		"session":          session,
-		"pending_requests": len(pendingRequests),
-		"requests":         pendingRequests,
+		"success":    true,
+		"request_id": req.ID,
+		"status":     req.Status,
+		"created_at": req.CreatedAt,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
-func (h *HITLHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+func (h *HITLHandler) PollRequest(w http.ResponseWriter, r *http.Request) {
+	requestID := r.URL.Query().Get("request_id")
+	if requestID == "" {
+		http.Error(w, "Missing request_id parameter", http.StatusBadRequest)
 		return
 	}
 
-	stats := h.sessionManager.GetStats()
-	stats["pending_requests"] = h.router.GetPendingRequestsCount()
-	stats["timestamp"] = time.Now()
-	stats["status"] = "healthy"
+	request, err := h.sessionManager.GetRequest(requestID)
+	if err != nil {
+		http.Error(w, "Request not found", http.StatusNotFound)
+		return
+	}
+
+	response := types.PollResponse{
+		RequestID: requestID,
+		Status:    request.Status,
+		Response:  request.Response,
+		Approved:  request.Approved,
+		Completed: request.Status == types.RequestStatusCompleted ||
+		          request.Status == types.RequestStatusTimeout ||
+		          request.Status == types.RequestStatusCanceled,
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(stats)
+	json.NewEncoder(w).Encode(response)
 }
 
-func (h *HITLHandler) HandleSessionDeactivation(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+func (h *HITLHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.URL.Query().Get("session_id")
+	if sessionID == "" {
+		http.Error(w, "Missing session_id parameter", http.StatusBadRequest)
 		return
 	}
 
-	var deactReq struct {
+	session, err := h.sessionManager.GetSession(sessionID)
+	if err != nil {
+		http.Error(w, "Session not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(session)
+}
+
+func (h *HITLHandler) DeactivateSession(w http.ResponseWriter, r *http.Request) {
+	var req struct {
 		SessionID string `json:"session_id"`
 	}
-
-	if err := json.NewDecoder(r.Body).Decode(&deactReq); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+	
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	if deactReq.SessionID == "" {
-		http.Error(w, "session_id is required", http.StatusBadRequest)
+	if req.SessionID == "" {
+		http.Error(w, "Missing session_id", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.sessionManager.DeactivateSession(deactReq.SessionID); err != nil {
-		log.Printf("Failed to deactivate session %s: %v", deactReq.SessionID, err)
+	err := h.sessionManager.DeactivateSession(req.SessionID)
+	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to deactivate session: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("Deactivated session: %s", deactReq.SessionID)
+	log.Printf("Deactivated session: %s", req.SessionID)
 
 	response := map[string]interface{}{
-		"status":     "deactivated",
-		"session_id": deactReq.SessionID,
-		"timestamp":  time.Now(),
+		"success": true,
+		"message": "Session deactivated successfully",
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
-func (h *HITLHandler) validateRequest(req *types.HITLRequest) error {
-	if req.SessionID == "" {
-		return fmt.Errorf("session_id is required")
+func (h *HITLHandler) ListPendingRequests(w http.ResponseWriter, r *http.Request) {
+	pending := h.sessionManager.GetPendingRequests()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"pending_requests": pending,
+		"count":           len(pending),
+	})
+}
+
+func (h *HITLHandler) CancelRequest(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RequestID string `json:"request_id"`
 	}
-	if req.ClientID == "" {
-		return fmt.Errorf("client_id is required")
+	
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
 	}
-	if req.Message == "" {
-		return fmt.Errorf("message is required")
+
+	if req.RequestID == "" {
+		http.Error(w, "Missing request_id", http.StatusBadRequest)
+		return
 	}
-	return nil
+
+	err := h.sessionManager.CancelRequest(req.RequestID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to cancel request: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("Canceled request: %s", req.RequestID)
+
+	response := map[string]interface{}{
+		"success": true,
+		"message": "Request canceled successfully",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }

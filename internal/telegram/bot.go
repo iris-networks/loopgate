@@ -1,286 +1,268 @@
 package telegram
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"net/http"
+	"log"
+	"loopgate/internal/session"
+	"loopgate/internal/types"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 
-	"loopgate/internal/types"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 type Bot struct {
-	token       string
-	sessions    map[string]*types.Session
-	chatSessions map[int64]string
-	mu          sync.RWMutex
-	mcpServer   MCPHandler
+	api            *tgbotapi.BotAPI
+	sessionManager *session.Manager
+	updates        tgbotapi.UpdatesChannel
 }
 
-type MCPHandler interface {
-	HandleTelegramResponse(requestID string, response *types.HITLResponse) error
-}
+func NewBot(token string, sessionManager *session.Manager) (*Bot, error) {
+	bot, err := tgbotapi.NewBotAPI(token)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create telegram bot: %w", err)
+	}
 
-type TelegramUpdate struct {
-	UpdateID int `json:"update_id"`
-	Message  *struct {
-		MessageID int `json:"message_id"`
-		Chat      struct {
-			ID int64 `json:"id"`
-		} `json:"chat"`
-		Text string `json:"text"`
-	} `json:"message"`
-	CallbackQuery *struct {
-		ID   string `json:"id"`
-		Data string `json:"data"`
-		Message struct {
-			MessageID int `json:"message_id"`
-			Chat      struct {
-				ID int64 `json:"id"`
-			} `json:"chat"`
-		} `json:"message"`
-	} `json:"callback_query"`
-}
+	bot.Debug = false
 
-func NewBot(token string) *Bot {
+	u := tgbotapi.NewUpdate(0)
+	u.Timeout = 60
+
+	updates := bot.GetUpdatesChan(u)
+
 	return &Bot{
-		token:        token,
-		sessions:     make(map[string]*types.Session),
-		chatSessions: make(map[int64]string),
+		api:            bot,
+		sessionManager: sessionManager,
+		updates:        updates,
+	}, nil
+}
+
+func (b *Bot) Start() {
+	log.Println("Starting Telegram bot...")
+	
+	for update := range b.updates {
+		if update.Message != nil {
+			b.handleMessage(update.Message)
+		} else if update.CallbackQuery != nil {
+			b.handleCallbackQuery(update.CallbackQuery)
+		}
 	}
 }
 
-func (b *Bot) SetMCPHandler(handler MCPHandler) {
-	b.mcpServer = handler
-}
-
-func (b *Bot) SendMessage(chatID int64, message string, options []string) error {
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", b.token)
-	
-	var keyboard interface{}
-	if len(options) > 0 {
-		buttons := make([][]map[string]string, len(options))
-		for i, option := range options {
-			buttons[i] = []map[string]string{
-				{
-					"text":          option,
-					"callback_data": fmt.Sprintf("option_%d", i),
-				},
-			}
-		}
-		keyboard = map[string]interface{}{
-			"inline_keyboard": buttons,
-		}
-	}
-
-	payload := map[string]interface{}{
-		"chat_id": chatID,
-		"text":    message,
-	}
-	
-	if keyboard != nil {
-		payload["reply_markup"] = keyboard
-	}
-
-	jsonPayload, err := json.Marshal(payload)
+func (b *Bot) SendHITLRequest(request *types.HITLRequest) error {
+	telegramID, err := b.sessionManager.GetTelegramID(request.ClientID)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get telegram ID for client %s: %w", request.ClientID, err)
 	}
 
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonPayload))
+	var msg tgbotapi.MessageConfig
+
+	if len(request.Options) > 0 {
+		msg = b.createMessageWithButtons(telegramID, request)
+	} else {
+		msg = b.createSimpleMessage(telegramID, request)
+	}
+
+	sentMsg, err := b.api.Send(msg)
 	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("telegram API error: %d", resp.StatusCode)
+		return fmt.Errorf("failed to send telegram message: %w", err)
 	}
 
+	request.TelegramMsgID = sentMsg.MessageID
 	return nil
 }
 
-func (b *Bot) RegisterSession(sessionID, clientID string, chatID int64) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+func (b *Bot) createMessageWithButtons(chatID int64, request *types.HITLRequest) tgbotapi.MessageConfig {
+	text := fmt.Sprintf("🤖 *HITL Request*\n\n%s\n\n*Request ID:* `%s`\n*Client:* %s\n*Session:* %s",
+		request.Message, request.ID, request.ClientID, request.SessionID)
 
-	session := &types.Session{
-		ID:           sessionID,
-		ClientID:     clientID,
-		TelegramID:   chatID,
-		IsActive:     true,
-		CreatedAt:    time.Now(),
-		LastActivity: time.Now(),
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = "Markdown"
+
+	var rows [][]tgbotapi.InlineKeyboardButton
+	for i, option := range request.Options {
+		callback := fmt.Sprintf("response:%s:%d", request.ID, i)
+		button := tgbotapi.NewInlineKeyboardButtonData(option, callback)
+		rows = append(rows, []tgbotapi.InlineKeyboardButton{button})
 	}
 
-	b.sessions[sessionID] = session
-	b.chatSessions[chatID] = sessionID
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(rows...)
+	msg.ReplyMarkup = keyboard
 
-	return nil
+	return msg
 }
 
-func (b *Bot) GetChatID(sessionID string) (int64, error) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+func (b *Bot) createSimpleMessage(chatID int64, request *types.HITLRequest) tgbotapi.MessageConfig {
+	text := fmt.Sprintf("🤖 *HITL Request*\n\n%s\n\n*Request ID:* `%s`\n*Client:* %s\n*Session:* %s\n\nPlease reply with your response.",
+		request.Message, request.ID, request.ClientID, request.SessionID)
 
-	session, exists := b.sessions[sessionID]
-	if !exists {
-		return 0, fmt.Errorf("session not found: %s", sessionID)
-	}
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = "Markdown"
 
-	return session.TelegramID, nil
+	return msg
 }
 
-func (b *Bot) HandleWebhook(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+func (b *Bot) handleMessage(message *tgbotapi.Message) {
+	if message.IsCommand() {
+		b.handleCommand(message)
 		return
 	}
 
-	var update TelegramUpdate
-	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
-
-	if update.Message != nil && update.Message.Text != "" {
-		b.handleTextMessage(update.Message.Chat.ID, update.Message.Text)
-	} else if update.CallbackQuery != nil {
-		b.handleCallbackQuery(update.CallbackQuery)
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
-func (b *Bot) handleTextMessage(chatID int64, text string) {
-	b.mu.RLock()
-	sessionID, exists := b.chatSessions[chatID]
-	b.mu.RUnlock()
-
-	if !exists {
-		b.SendMessage(chatID, "Session not registered. Please register your session first.", nil)
-		return
-	}
-
-	response := &types.HITLResponse{
-		ID:       "unknown",
-		Response: text,
-		Approved: strings.ToLower(text) == "yes" || strings.ToLower(text) == "approve",
-		Time:     time.Now(),
-	}
-
-	if b.mcpServer != nil {
-		b.mcpServer.HandleTelegramResponse(sessionID, response)
+	if message.ReplyToMessage != nil {
+		b.handleReply(message)
 	}
 }
 
-func (b *Bot) handleCallbackQuery(query *struct {
-	ID   string `json:"id"`
-	Data string `json:"data"`
-	Message struct {
-		MessageID int `json:"message_id"`
-		Chat      struct {
-			ID int64 `json:"id"`
-		} `json:"chat"`
-	} `json:"message"`
-}) {
-	chatID := query.Message.Chat.ID
+func (b *Bot) handleCommand(message *tgbotapi.Message) {
+	switch message.Command() {
+	case "start":
+		b.sendResponse(message.Chat.ID, "Welcome to Loopgate! Use /status to check active sessions.")
+	case "status":
+		b.handleStatusCommand(message.Chat.ID)
+	case "pending":
+		b.handlePendingCommand(message.Chat.ID)
+	default:
+		b.sendResponse(message.Chat.ID, "Unknown command. Available commands: /start, /status, /pending")
+	}
+}
 
-	b.mu.RLock()
-	sessionID, exists := b.chatSessions[chatID]
-	b.mu.RUnlock()
-
-	if !exists {
+func (b *Bot) handleStatusCommand(chatID int64) {
+	sessions := b.sessionManager.GetActiveSessions()
+	
+	if len(sessions) == 0 {
+		b.sendResponse(chatID, "No active sessions found.")
 		return
 	}
 
-	selected := -1
-	if strings.HasPrefix(query.Data, "option_") {
-		if idx, err := strconv.Atoi(strings.TrimPrefix(query.Data, "option_")); err == nil {
-			selected = idx
+	text := "*Active Sessions:*\n\n"
+	for _, session := range sessions {
+		if session.TelegramID == chatID {
+			text += fmt.Sprintf("• Session: `%s`\n  Client: %s\n  Started: %s\n\n",
+				session.ID, session.ClientID, session.CreatedAt.Format("2006-01-02 15:04:05"))
 		}
 	}
 
-	response := &types.HITLResponse{
-		ID:       generateResponseID(),
-		Response: query.Data,
-		Selected: selected,
-		Approved: true,
-		Time:     time.Now(),
-	}
-
-	if b.mcpServer != nil {
-		b.mcpServer.HandleTelegramResponse(sessionID, response)
-	}
-
-	b.answerCallbackQuery(query.ID)
+	b.sendMarkdownResponse(chatID, text)
 }
 
-func (b *Bot) answerCallbackQuery(queryID string) {
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/answerCallbackQuery", b.token)
-	payload := map[string]string{"callback_query_id": queryID}
+func (b *Bot) handlePendingCommand(chatID int64) {
+	pending := b.sessionManager.GetPendingRequests()
 	
-	jsonPayload, _ := json.Marshal(payload)
-	http.Post(url, "application/json", bytes.NewBuffer(jsonPayload))
-}
+	if len(pending) == 0 {
+		b.sendResponse(chatID, "No pending requests.")
+		return
+	}
 
-func (b *Bot) StartPolling() {
-	offset := 0
-	for {
-		updates, err := b.getUpdates(offset)
-		if err != nil {
-			time.Sleep(time.Second)
+	text := "*Pending Requests:*\n\n"
+	for _, request := range pending {
+		telegramID, err := b.sessionManager.GetTelegramID(request.ClientID)
+		if err != nil || telegramID != chatID {
 			continue
 		}
-
-		for _, update := range updates {
-			offset = update.UpdateID + 1
-			go b.processUpdate(update)
-		}
-
-		if len(updates) == 0 {
-			time.Sleep(time.Second)
-		}
+		
+		text += fmt.Sprintf("• Request: `%s`\n  Message: %s\n  Client: %s\n\n",
+			request.ID, request.Message, request.ClientID)
 	}
+
+	b.sendMarkdownResponse(chatID, text)
 }
 
-func (b *Bot) getUpdates(offset int) ([]TelegramUpdate, error) {
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?offset=%d", b.token, offset)
+func (b *Bot) handleReply(message *tgbotapi.Message) {
+	replyText := message.ReplyToMessage.Text
 	
-	resp, err := http.Get(url)
+	if !strings.Contains(replyText, "Request ID:") {
+		return
+	}
+
+	requestID := b.extractRequestID(replyText)
+	if requestID == "" {
+		return
+	}
+
+	err := b.sessionManager.UpdateRequestResponse(requestID, message.Text, true)
 	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		OK     bool              `json:"ok"`
-		Result []TelegramUpdate `json:"result"`
+		b.sendResponse(message.Chat.ID, fmt.Sprintf("Error updating request: %v", err))
+		return
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-
-	if !result.OK {
-		return nil, fmt.Errorf("telegram API error")
-	}
-
-	return result.Result, nil
+	b.sendResponse(message.Chat.ID, "✅ Response recorded successfully!")
 }
 
-func (b *Bot) processUpdate(update TelegramUpdate) {
-	if update.Message != nil && update.Message.Text != "" {
-		b.handleTextMessage(update.Message.Chat.ID, update.Message.Text)
-	} else if update.CallbackQuery != nil {
-		b.handleCallbackQuery(update.CallbackQuery)
+func (b *Bot) handleCallbackQuery(query *tgbotapi.CallbackQuery) {
+	data := query.Data
+	
+	if !strings.HasPrefix(data, "response:") {
+		return
 	}
+
+	parts := strings.Split(data, ":")
+	if len(parts) != 3 {
+		return
+	}
+
+	requestID := parts[1]
+	optionIndex, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return
+	}
+
+	request, err := b.sessionManager.GetRequest(requestID)
+	if err != nil {
+		b.answerCallbackQuery(query.ID, "Request not found")
+		return
+	}
+
+	if optionIndex >= len(request.Options) {
+		b.answerCallbackQuery(query.ID, "Invalid option")
+		return
+	}
+
+	selectedOption := request.Options[optionIndex]
+	approved := strings.ToLower(selectedOption) != "cancel" && 
+	           strings.ToLower(selectedOption) != "reject" &&
+	           strings.ToLower(selectedOption) != "deny"
+
+	err = b.sessionManager.UpdateRequestResponse(requestID, selectedOption, approved)
+	if err != nil {
+		b.answerCallbackQuery(query.ID, "Error updating request")
+		return
+	}
+
+	b.answerCallbackQuery(query.ID, fmt.Sprintf("Selected: %s", selectedOption))
+	
+	updateText := fmt.Sprintf("✅ *Response Recorded*\n\nSelected: %s\nRequest ID: `%s`", 
+		selectedOption, requestID)
+	
+	edit := tgbotapi.NewEditMessageText(query.Message.Chat.ID, query.Message.MessageID, updateText)
+	edit.ParseMode = "Markdown"
+	b.api.Send(edit)
 }
 
-func generateResponseID() string {
-	return fmt.Sprintf("resp_%d", time.Now().UnixNano())
+func (b *Bot) extractRequestID(text string) string {
+	lines := strings.Split(text, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "Request ID:") {
+			parts := strings.Split(line, "`")
+			if len(parts) >= 2 {
+				return parts[1]
+			}
+		}
+	}
+	return ""
+}
+
+func (b *Bot) sendResponse(chatID int64, text string) {
+	msg := tgbotapi.NewMessage(chatID, text)
+	b.api.Send(msg)
+}
+
+func (b *Bot) sendMarkdownResponse(chatID int64, text string) {
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = "Markdown"
+	b.api.Send(msg)
+}
+
+func (b *Bot) answerCallbackQuery(queryID, text string) {
+	callback := tgbotapi.NewCallback(queryID, text)
+	b.api.Request(callback)
 }

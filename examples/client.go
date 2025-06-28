@@ -1,112 +1,156 @@
 package main
 
 import (
+	"fmt"
+	"log"
+	"loopgate/pkg/client"
+)
+
+func main() {
+	mcpClient := client.NewMCPClient()
+
+	err := mcpClient.ConnectToServer("./loopgate")
+	if err != nil {
+		log.Fatalf("Failed to connect to MCP server: %v", err)
+	}
+	defer mcpClient.Close()
+
+	err = mcpClient.Initialize("ExampleClient", "1.0.0")
+	if err != nil {
+		log.Fatalf("Failed to initialize MCP client: %v", err)
+	}
+
+	fmt.Println("Connected to Loopgate MCP server!")
+
+	tools, err := mcpClient.ListTools()
+	if err != nil {
+		log.Fatalf("Failed to list tools: %v", err)
+	}
+
+	fmt.Printf("Available tools: %d\n", len(tools))
+	for _, tool := range tools {
+		fmt.Printf("- %s: %s\n", tool.Name, tool.Description)
+	}
+
+	fmt.Println("\nSending HITL request...")
+	
+	response, err := mcpClient.SendHITLRequest(
+		"example-session",
+		"example-client",
+		"Should we proceed with the deployment?",
+		[]string{"Deploy", "Cancel", "Review"},
+		map[string]interface{}{
+			"version":     "v1.2.3",
+			"environment": "production",
+		},
+	)
+	
+	if err != nil {
+		log.Fatalf("Failed to send HITL request: %v", err)
+	}
+
+	fmt.Printf("HITL response: %+v\n", response)
+}
+
+func exampleHTTPClient() {
+	httpExample := `
+package main
+
+import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
+	"io"
 	"net/http"
 	"time"
 )
 
 type HITLRequest struct {
-	ID        string                 `json:"id"`
-	ClientID  string                 `json:"client_id"`
-	SessionID string                 `json:"session_id"`
-	Message   string                 `json:"message"`
-	Options   []string               `json:"options,omitempty"`
-	Metadata  map[string]interface{} `json:"metadata,omitempty"`
-	Timestamp time.Time              `json:"timestamp"`
+	SessionID string                 ` + "`json:\"session_id\"`" + `
+	ClientID  string                 ` + "`json:\"client_id\"`" + `
+	Message   string                 ` + "`json:\"message\"`" + `
+	Options   []string               ` + "`json:\"options,omitempty\"`" + `
+	Metadata  map[string]interface{} ` + "`json:\"metadata,omitempty\"`" + `
 }
 
-type HITLResponse struct {
-	ID       string    `json:"id"`
-	Response string    `json:"response"`
-	Selected int       `json:"selected,omitempty"`
-	Approved bool      `json:"approved"`
-	Time     time.Time `json:"time"`
+type SessionRegistration struct {
+	SessionID  string ` + "`json:\"session_id\"`" + `
+	ClientID   string ` + "`json:\"client_id\"`" + `
+	TelegramID int64  ` + "`json:\"telegram_id\"`" + `
 }
 
 func main() {
-	serverURL := "http://localhost:8080"
-
-	sessionID := "test-session-123"
-	clientID := "test-client"
-	telegramID := int64(12345678)
-
-	fmt.Println("1. Registering session...")
-	if err := registerSession(serverURL, sessionID, clientID, telegramID); err != nil {
-		log.Fatalf("Failed to register session: %v", err)
+	baseURL := "http://localhost:8080"
+	
+	// Register session
+	regReq := SessionRegistration{
+		SessionID:  "production-deploy-bot",
+		ClientID:   "ci-cd-pipeline",
+		TelegramID: 123456789, // Your Telegram user ID
 	}
-	fmt.Println("✅ Session registered successfully")
-
-	fmt.Println("\n2. Sending HITL request...")
-	request := HITLRequest{
-		ID:        "request-001",
-		ClientID:  clientID,
-		SessionID: sessionID,
-		Message:   "Should I proceed with the deployment to production?",
-		Options:   []string{"Deploy", "Cancel", "Review First"},
+	
+	regJSON, _ := json.Marshal(regReq)
+	resp, err := http.Post(baseURL+"/hitl/register", "application/json", bytes.NewBuffer(regJSON))
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+	
+	fmt.Println("Session registered")
+	
+	// Send HITL request
+	hitlReq := HITLRequest{
+		SessionID: "production-deploy-bot",
+		ClientID:  "ci-cd-pipeline",
+		Message:   "Deploy v2.1.0 to production? All tests passed ✅",
+		Options:   []string{"🚀 Deploy", "⏸️ Hold", "🔍 Review First"},
 		Metadata: map[string]interface{}{
-			"environment": "production",
-			"service":     "api-gateway",
-			"version":     "v1.2.3",
+			"version":      "v2.1.0",
+			"tests_passed": 847,
+			"environment":  "production",
 		},
 	}
-
-	response, err := sendHITLRequest(serverURL, request)
+	
+	hitlJSON, _ := json.Marshal(hitlReq)
+	resp, err = http.Post(baseURL+"/hitl/request", "application/json", bytes.NewBuffer(hitlJSON))
 	if err != nil {
-		log.Fatalf("Failed to send HITL request: %v", err)
-	}
-
-	fmt.Printf("✅ Received response: %s (Approved: %t)\n", response.Response, response.Approved)
-}
-
-func registerSession(serverURL, sessionID, clientID string, telegramID int64) error {
-	payload := map[string]interface{}{
-		"session_id":  sessionID,
-		"client_id":   clientID,
-		"telegram_id": telegramID,
-	}
-
-	jsonPayload, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-
-	resp, err := http.Post(serverURL+"/hitl/register", "application/json", bytes.NewBuffer(jsonPayload))
-	if err != nil {
-		return err
+		panic(err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("registration failed with status: %d", resp.StatusCode)
+	
+	var result map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+	requestID := result["request_id"].(string)
+	
+	fmt.Printf("Request submitted: %s\n", requestID)
+	
+	// Poll for response
+	for {
+		pollResp, err := http.Get(fmt.Sprintf("%s/hitl/poll?request_id=%s", baseURL, requestID))
+		if err != nil {
+			panic(err)
+		}
+		
+		body, _ := io.ReadAll(pollResp.Body)
+		pollResp.Body.Close()
+		
+		var status map[string]interface{}
+		json.Unmarshal(body, &status)
+		
+		if status["completed"].(bool) {
+			if status["approved"].(bool) {
+				fmt.Printf("✅ Approved: %s\n", status["response"])
+			} else {
+				fmt.Printf("❌ Denied: %s\n", status["response"])
+			}
+			break
+		}
+		
+		fmt.Println("⏳ Waiting for human response...")
+		time.Sleep(5 * time.Second)
 	}
-
-	return nil
 }
-
-func sendHITLRequest(serverURL string, request HITLRequest) (*HITLResponse, error) {
-	jsonPayload, err := json.Marshal(request)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := http.Post(serverURL+"/hitl/request", "application/json", bytes.NewBuffer(jsonPayload))
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("request failed with status: %d", resp.StatusCode)
-	}
-
-	var response HITLResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, err
-	}
-
-	return &response, nil
+`
+	fmt.Println("HTTP client example:")
+	fmt.Println(httpExample)
 }
