@@ -22,29 +22,29 @@ const (
 )
 
 type HITLRequest struct {
-	ID            string                 `json:"id"`
-	SessionID     string                 `json:"session_id"`
-	ClientID      string                 `json:"client_id"`
-	Message       string                 `json:"message"`
-	RequestType   RequestType            `json:"request_type"`
-	Options       []string               `json:"options,omitempty"`
-	Timeout       int                    `json:"timeout_seconds"`
-	CallbackURL   string                 `json:"callback_url,omitempty"`
-	Metadata      map[string]interface{} `json:"metadata,omitempty"`
-	Status        RequestStatus          `json:"status"`
-	Response      string                 `json:"response,omitempty"`
-	Approved      bool                   `json:"approved"`
-	CreatedAt     time.Time              `json:"created_at"`
-	RespondedAt   *time.Time             `json:"responded_at,omitempty"`
-	TelegramMsgID int                    `json:"telegram_msg_id,omitempty"`
+	ID            string                 `json:"id" bson:"_id"` // Use 'id' as MongoDB's _id
+	SessionID     string                 `json:"session_id" bson:"session_id"`
+	ClientID      string                 `json:"client_id" bson:"client_id"`
+	Message       string                 `json:"message" bson:"message"`
+	RequestType   RequestType            `json:"request_type" bson:"request_type"`
+	Options       []string               `json:"options,omitempty" bson:"options,omitempty"`
+	Timeout       int                    `json:"timeout_seconds" bson:"timeout_seconds"`
+	CallbackURL   string                 `json:"callback_url,omitempty" bson:"callback_url,omitempty"`
+	Metadata      map[string]interface{} `json:"metadata,omitempty" bson:"metadata,omitempty"`
+	Status        RequestStatus          `json:"status" bson:"status"`
+	Response      string                 `json:"response,omitempty" bson:"response,omitempty"`
+	Approved      bool                   `json:"approved" bson:"approved"`
+	CreatedAt     time.Time              `json:"created_at" bson:"created_at"`
+	RespondedAt   *time.Time             `json:"responded_at,omitempty" bson:"responded_at,omitempty"`
+	TelegramMsgID int                    `json:"telegram_msg_id,omitempty" bson:"telegram_msg_id,omitempty"`
 }
 
 type Session struct {
-	ID         string `json:"id"`
-	ClientID   string `json:"client_id"`
-	TelegramID int64  `json:"telegram_id"`
-	Active     bool   `json:"active"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID         string    `json:"id" bson:"_id"` // Use 'id' as MongoDB's _id
+	ClientID   string    `json:"client_id" bson:"client_id"`
+	TelegramID int64     `json:"telegram_id" bson:"telegram_id"`
+	Active     bool      `json:"active" bson:"active"`
+	CreatedAt  time.Time `json:"created_at" bson:"created_at"`
 }
 
 type HITLResponse struct {

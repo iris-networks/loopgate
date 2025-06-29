@@ -60,8 +60,14 @@ cd loopgate
 make build
 
 # Set environment variables
-export TELEGRAM_BOT_TOKEN="7123456789:AAEhBOweik6ad6PsWZRcXUgPaGFhqOClv"
+# (Update .env file or export these)
+export TELEGRAM_BOT_TOKEN="your_telegram_bot_token"
 export SERVER_PORT=8080
+export MONGODB_URI="mongodb://localhost:27017" # Default for local MongoDB
+export MONGODB_DATABASE="loopgate"             # Default database name
+
+# Ensure MongoDB is running
+# (e.g., using Docker: docker run -d -p 27017:27017 mongo)
 
 # Run the server
 make run
@@ -241,7 +247,11 @@ SERVER_PORT=8080                 # Default: 8080
 LOG_LEVEL=info                   # Default: info
 REQUEST_TIMEOUT=300              # Default: 300 seconds
 MAX_CONCURRENT_REQUESTS=100      # Default: 100
+MONGODB_URI="mongodb://localhost:27017" # Default: mongodb://localhost:27017
+MONGODB_DATABASE="loopgate"        # Default: loopgate
 ```
+
+Loopgate now uses MongoDB for persistent storage of sessions and HITL requests. Ensure you have a MongoDB instance running and accessible to the Loopgate server. The connection URI and database name are configured via the `MONGODB_URI` and `MONGODB_DATABASE` environment variables, respectively.
 
 ### Docker Support
 

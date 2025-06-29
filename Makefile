@@ -30,4 +30,12 @@ deps:
 docker-build:
 	docker build -t $(BINARY_NAME):latest .
 
+# MongoDB development instance management
+mongo-dev-start:
+	docker run -d --name loopgate-mongo-dev -p 27017:27017 mongo:latest
+
+mongo-dev-stop:
+	docker stop loopgate-mongo-dev
+	docker rm loopgate-mongo-dev
+
 .DEFAULT_GOAL := build
