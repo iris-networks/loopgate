@@ -8,4 +8,7 @@ require (
 	github.com/gorilla/mux v1.8.1
 )
 
-require github.com/joho/godotenv v1.5.1 // indirect
+require (
+	github.com/joho/godotenv v1.5.1 // indirect
+	go.mongodb.org/mongo-driver v1.15.0 // indirect
+)

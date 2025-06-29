@@ -2,30 +2,31 @@ package session
 
 import (
 	"errors"
+	"loopgate/internal/store"
 	"loopgate/internal/types"
-	"sync"
 	"time"
+
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
+// Manager handles business logic related to sessions and HITL requests.
+// It now uses a MongoDB backend for data persistence.
 type Manager struct {
-	sessions map[string]*types.Session
-	requests map[string]*types.HITLRequest
-	clientToTelegram map[string]int64
-	mu       sync.RWMutex
+	db *mongo.Database
 }
 
-func NewManager() *Manager {
+// NewManager creates a new session manager with a MongoDB database connection.
+func NewManager(db *mongo.Database) *Manager {
+	if db == nil {
+		panic("session.NewManager: mongo.Database instance cannot be nil")
+	}
 	return &Manager{
-		sessions:         make(map[string]*types.Session),
-		requests:         make(map[string]*types.HITLRequest),
-		clientToTelegram: make(map[string]int64),
+		db: db,
 	}
 }
 
+// RegisterSession creates a new session and stores it in MongoDB.
 func (m *Manager) RegisterSession(sessionID, clientID string, telegramID int64) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	session := &types.Session{
 		ID:         sessionID,
 		ClientID:   clientID,
@@ -33,126 +34,114 @@ func (m *Manager) RegisterSession(sessionID, clientID string, telegramID int64) 
 		Active:     true,
 		CreatedAt:  time.Now(),
 	}
-
-	m.sessions[sessionID] = session
-	m.clientToTelegram[clientID] = telegramID
-
+	// TODO: Decide on handling if sessionID already exists.
+	// store.MongoRegisterSession currently returns an error if _id (session.ID) conflicts.
+	// Consider an upsert in MongoRegisterSession or specific error handling here.
+	err := store.MongoRegisterSession(m.db, session)
+	if err != nil {
+		// Potentially check for mongo.IsDuplicateKeyError(err) if specific handling is needed
+		return err
+	}
 	return nil
 }
 
+// DeactivateSession marks a session as inactive in MongoDB.
 func (m *Manager) DeactivateSession(sessionID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	session, exists := m.sessions[sessionID]
-	if !exists {
+	err := store.MongoDeactivateSession(m.db, sessionID)
+	if errors.Is(err, mongo.ErrNoDocuments) {
 		return errors.New("session not found")
 	}
-
-	session.Active = false
-	delete(m.clientToTelegram, session.ClientID)
-
-	return nil
+	return err
 }
 
+// GetSession retrieves a session by its ID from MongoDB.
 func (m *Manager) GetSession(sessionID string) (*types.Session, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	session, exists := m.sessions[sessionID]
-	if !exists {
+	session, err := store.MongoGetSession(m.db, sessionID)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, errors.New("session not found")
+		}
+		return nil, err
+	}
+	if session == nil { // Should be covered by ErrNoDocuments, but as a safeguard
 		return nil, errors.New("session not found")
 	}
-
 	return session, nil
 }
 
+// GetTelegramID retrieves the Telegram ID for an active client session from MongoDB.
 func (m *Manager) GetTelegramID(clientID string) (int64, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	telegramID, exists := m.clientToTelegram[clientID]
-	if !exists {
-		return 0, errors.New("client not found")
+	telegramID, err := store.MongoGetTelegramIDForClient(m.db, clientID)
+	if err != nil {
+		// The store function store.MongoGetTelegramIDForClient already returns a specific error
+		// (e.g., errors.New("active session not found for client")) when no document is found.
+		// So, we can often return err directly.
+		// If we wanted to standardize to a generic "client not found" vs "other db error",
+		// we might check 'errors.Is(err, store.ErrNotFound)' or similar if store exposed typed errors.
+		return 0, err
 	}
-
 	return telegramID, nil
 }
 
-func (m *Manager) StoreRequest(request *types.HITLRequest) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.requests[request.ID] = request
+// StoreRequest persists a new HITL request to MongoDB.
+func (m *Manager) StoreRequest(request *types.HITLRequest) error {
+	// The original StoreRequest didn't return an error, but DAL operations do.
+	// It's better to propagate the error.
+	return store.MongoStoreRequest(m.db, request)
 }
 
+// GetRequest retrieves a HITL request by its ID from MongoDB.
 func (m *Manager) GetRequest(requestID string) (*types.HITLRequest, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	request, exists := m.requests[requestID]
-	if !exists {
+	request, err := store.MongoGetRequest(m.db, requestID)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, errors.New("request not found")
+		}
+		return nil, err
+	}
+	if request == nil { // Safeguard
 		return nil, errors.New("request not found")
 	}
-
 	return request, nil
 }
 
+// UpdateRequestResponse updates a HITL request with the response details in MongoDB.
 func (m *Manager) UpdateRequestResponse(requestID, response string, approved bool) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	status := types.RequestStatusCompleted
+	// Note: The original implementation didn't explicitly handle other statuses like Timeout here.
+	// This function is specifically for when a human responds.
 
-	request, exists := m.requests[requestID]
-	if !exists {
-		return errors.New("request not found")
+	err := store.MongoUpdateRequestResponse(m.db, requestID, response, approved, status, time.Now())
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return errors.New("request not found when updating response")
 	}
-
-	now := time.Now()
-	request.Response = response
-	request.Approved = approved
-	request.Status = types.RequestStatusCompleted
-	request.RespondedAt = &now
-
-	return nil
+	return err
 }
 
-func (m *Manager) GetPendingRequests() []*types.HITLRequest {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	var pending []*types.HITLRequest
-	for _, request := range m.requests {
-		if request.Status == types.RequestStatusPending {
-			pending = append(pending, request)
-		}
+// GetPendingRequests retrieves all pending HITL requests from MongoDB.
+// The new DAL function store.MongoGetPendingRequests also doesn't take clientID.
+func (m *Manager) GetPendingRequests() ([]*types.HITLRequest, error) {
+	requests, err := store.MongoGetPendingRequests(m.db)
+	if err != nil {
+		return nil, err
 	}
-
-	return pending
+	return requests, nil
 }
 
+// CancelRequest marks a HITL request as canceled in MongoDB.
 func (m *Manager) CancelRequest(requestID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	request, exists := m.requests[requestID]
-	if !exists {
-		return errors.New("request not found")
+	err := store.MongoCancelRequest(m.db, requestID)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return errors.New("request not found when canceling")
 	}
-
-	request.Status = types.RequestStatusCanceled
-	return nil
+	return err
 }
 
-func (m *Manager) GetActiveSessions() []*types.Session {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	var active []*types.Session
-	for _, session := range m.sessions {
-		if session.Active {
-			active = append(active, session)
-		}
+// GetActiveSessions retrieves all active sessions from MongoDB.
+func (m *Manager) GetActiveSessions() ([]*types.Session, error) {
+	sessions, err := store.MongoGetActiveSessions(m.db)
+	if err != nil {
+		return nil, err
 	}
-
-	return active
+	return sessions, nil
 }

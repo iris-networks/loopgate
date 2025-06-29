@@ -8,6 +8,7 @@ import (
 	"loopgate/internal/mcp"
 	"loopgate/internal/router"
 	"loopgate/internal/session"
+	"loopgate/internal/store" // Added store import
 	"loopgate/internal/telegram"
 	"net/http"
 	"os"
@@ -23,7 +24,20 @@ func main() {
 		log.Fatal("TELEGRAM_BOT_TOKEN environment variable is required")
 	}
 
-	sessionManager := session.NewManager()
+	// Initialize MongoDB connection
+	if err := store.Connect(cfg.MongoURI, cfg.MongoDatabase); err != nil {
+		log.Fatalf("Failed to connect to MongoDB: %v", err)
+	}
+	defer store.Disconnect()
+
+	// Ensure MongoDB indexes
+	db := store.GetDB()
+	if err := store.EnsureIndexes(db); err != nil {
+		log.Fatalf("Failed to ensure MongoDB indexes: %v", err)
+	}
+
+	// Pass the db instance to the session manager
+	sessionManager := session.NewManager(db)
 
 	telegramBot, err := telegram.NewBot(cfg.TelegramBotToken, sessionManager)
 	if err != nil {
@@ -32,7 +46,7 @@ func main() {
 
 	go telegramBot.Start()
 
-	mcpServer := mcp.NewServer()
+	mcpServer := mcp.NewServer() // Assuming MCP server doesn't directly need DB, else pass db
 	hitlHandler := handlers.NewHITLHandler(sessionManager, telegramBot)
 	appRouter := router.NewRouter(mcpServer, hitlHandler)
 

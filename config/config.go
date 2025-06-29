@@ -14,6 +14,8 @@ type Config struct {
 	LogLevel             string
 	RequestTimeout       int
 	MaxConcurrentRequests int
+	MongoURI             string
+	MongoDatabase        string
 }
 
 func Load() *Config {
@@ -27,6 +29,8 @@ func Load() *Config {
 		LogLevel:             getEnv("LOG_LEVEL", "info"),
 		RequestTimeout:       getEnvInt("REQUEST_TIMEOUT", 300),
 		MaxConcurrentRequests: getEnvInt("MAX_CONCURRENT_REQUESTS", 100),
+		MongoURI:             getEnv("MONGODB_URI", "mongodb://localhost:27017"),
+		MongoDatabase:        getEnv("MONGODB_DATABASE", "loopgate"),
 	}
 
 	return cfg

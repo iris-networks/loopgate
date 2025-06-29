@@ -98,7 +98,13 @@ func (h *HITLHandler) SubmitRequest(w http.ResponseWriter, r *http.Request) {
 
 	session, err := h.sessionManager.GetSession(req.SessionID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Session not found: %v", err), http.StatusNotFound)
+		// sessionManager.GetSession now returns a more specific "session not found" error
+		// or other potential DB errors.
+		if err.Error() == "session not found" { // Check for specific error string; could be improved with typed errors
+			http.Error(w, fmt.Sprintf("Session not found: %s", req.SessionID), http.StatusNotFound)
+		} else {
+			http.Error(w, fmt.Sprintf("Error retrieving session: %v", err), http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -107,7 +113,11 @@ func (h *HITLHandler) SubmitRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.sessionManager.StoreRequest(&req)
+	// sessionManager.StoreRequest now returns an error
+	if err := h.sessionManager.StoreRequest(&req); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to store HITL request: %v", err), http.StatusInternalServerError)
+		return
+	}
 
 	err = h.telegramBot.SendHITLRequest(&req)
 	if err != nil {
@@ -138,7 +148,12 @@ func (h *HITLHandler) PollRequest(w http.ResponseWriter, r *http.Request) {
 
 	request, err := h.sessionManager.GetRequest(requestID)
 	if err != nil {
-		http.Error(w, "Request not found", http.StatusNotFound)
+		// sessionManager.GetRequest now returns a more specific "request not found" error
+		if err.Error() == "request not found" { // Check for specific error string
+			http.Error(w, fmt.Sprintf("Request not found: %s", requestID), http.StatusNotFound)
+		} else {
+			http.Error(w, fmt.Sprintf("Error retrieving request: %v", err), http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -165,7 +180,11 @@ func (h *HITLHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 
 	session, err := h.sessionManager.GetSession(sessionID)
 	if err != nil {
-		http.Error(w, "Session not found", http.StatusNotFound)
+		if err.Error() == "session not found" {
+			http.Error(w, fmt.Sprintf("Session not found: %s", sessionID), http.StatusNotFound)
+		} else {
+			http.Error(w, fmt.Sprintf("Error retrieving session: %v", err), http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -190,7 +209,11 @@ func (h *HITLHandler) DeactivateSession(w http.ResponseWriter, r *http.Request) 
 
 	err := h.sessionManager.DeactivateSession(req.SessionID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to deactivate session: %v", err), http.StatusInternalServerError)
+		if err.Error() == "session not found" {
+			http.Error(w, fmt.Sprintf("Session to deactivate not found: %s", req.SessionID), http.StatusNotFound)
+		} else {
+			http.Error(w, fmt.Sprintf("Failed to deactivate session: %v", err), http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -206,12 +229,17 @@ func (h *HITLHandler) DeactivateSession(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *HITLHandler) ListPendingRequests(w http.ResponseWriter, r *http.Request) {
-	pending := h.sessionManager.GetPendingRequests()
+	// sessionManager.GetPendingRequests now returns an error
+	pending, err := h.sessionManager.GetPendingRequests()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to list pending requests: %v", err), http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"pending_requests": pending,
-		"count":           len(pending),
+		"count":            len(pending),
 	})
 }
 
@@ -232,7 +260,11 @@ func (h *HITLHandler) CancelRequest(w http.ResponseWriter, r *http.Request) {
 
 	err := h.sessionManager.CancelRequest(req.RequestID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to cancel request: %v", err), http.StatusInternalServerError)
+		if err.Error() == "request not found when canceling" { // Check for specific error string
+			http.Error(w, fmt.Sprintf("Request to cancel not found: %s", req.RequestID), http.StatusNotFound)
+		} else {
+			http.Error(w, fmt.Sprintf("Failed to cancel request: %v", err), http.StatusInternalServerError)
+		}
 		return
 	}
 
