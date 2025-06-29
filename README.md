@@ -1,5 +1,7 @@
 # 🔄 Loopgate
 
+![Loopgate](assets/image.png)
+
 > **The Model Context Protocol (MCP) server that empowers AI agents with human oversight**
 
 Loopgate is a high-performance, Golang-based MCP server that bridges AI agents and human operators for seamless Human-in-the-Loop (HITL) workflows. With real-time communication via Telegram, Loopgate ensures AI systems stay intelligent, compliant, and human-approved.
@@ -8,6 +10,12 @@ Loopgate is a high-performance, Golang-based MCP server that bridges AI agents a
 ![Go Version](https://img.shields.io/badge/go-1.21+-blue)
 ![MCP Version](https://img.shields.io/badge/MCP-2.0-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
+
+## 🎬 Demo
+
+![Loopgate HITL Demo](hitl-demo.gif)
+
+*See Loopgate in action: AI agent requests human approval via Telegram, human responds, and the agent receives the decision in real-time.*
 
 ## 📋 Table of Contents
 
@@ -40,12 +48,6 @@ graph LR
     C -->|Human Response| B
     B -->|Response| A
 ```
-
-## 🎬 Demo
-
-![Loopgate HITL Demo](hitl-demo.gif)
-
-*See Loopgate in action: AI agent requests human approval via Telegram, human responds, and the agent receives the decision in real-time.*
 
 ## ⚡ Quick Start
 
