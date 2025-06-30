@@ -22,15 +22,15 @@ const (
 )
 
 type HITLRequest struct {
-	ID            string                 `json:"id"`
+	ID            string                 `json:"id" gorm:"primaryKey"`
 	SessionID     string                 `json:"session_id"`
 	ClientID      string                 `json:"client_id"`
 	Message       string                 `json:"message"`
 	RequestType   RequestType            `json:"request_type"`
-	Options       []string               `json:"options,omitempty"`
+	Options       []string               `json:"options,omitempty" gorm:"serializer:json"`
 	Timeout       int                    `json:"timeout_seconds"`
 	CallbackURL   string                 `json:"callback_url,omitempty"`
-	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+	Metadata      map[string]interface{} `json:"metadata,omitempty" gorm:"serializer:json"`
 	Status        RequestStatus          `json:"status"`
 	Response      string                 `json:"response,omitempty"`
 	Approved      bool                   `json:"approved"`
@@ -40,7 +40,7 @@ type HITLRequest struct {
 }
 
 type Session struct {
-	ID         string `json:"id"`
+	ID         string `json:"id" gorm:"primaryKey"`
 	ClientID   string `json:"client_id"`
 	TelegramID int64  `json:"telegram_id"`
 	Active     bool   `json:"active"`

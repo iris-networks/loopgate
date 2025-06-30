@@ -206,12 +206,17 @@ func (h *HITLHandler) DeactivateSession(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *HITLHandler) ListPendingRequests(w http.ResponseWriter, r *http.Request) {
-	pending := h.sessionManager.GetPendingRequests()
+	pending, err := h.sessionManager.GetPendingRequests()
+	if err != nil {
+		log.Printf("Error getting pending requests: %v", err)
+		http.Error(w, "Error retrieving pending requests", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"pending_requests": pending,
-		"count":           len(pending),
+		"count":            len(pending),
 	})
 }
 

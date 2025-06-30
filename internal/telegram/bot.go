@@ -127,7 +127,12 @@ func (b *Bot) handleCommand(message *tgbotapi.Message) {
 }
 
 func (b *Bot) handleStatusCommand(chatID int64) {
-	sessions := b.sessionManager.GetActiveSessions()
+	sessions, err := b.sessionManager.GetActiveSessions()
+	if err != nil {
+		log.Printf("Error getting active sessions: %v", err)
+		b.sendResponse(chatID, "Error retrieving active sessions.")
+		return
+	}
 	
 	if len(sessions) == 0 {
 		b.sendResponse(chatID, "No active sessions found.")
@@ -146,7 +151,12 @@ func (b *Bot) handleStatusCommand(chatID int64) {
 }
 
 func (b *Bot) handlePendingCommand(chatID int64) {
-	pending := b.sessionManager.GetPendingRequests()
+	pending, err := b.sessionManager.GetPendingRequests()
+	if err != nil {
+		log.Printf("Error getting pending requests: %v", err)
+		b.sendResponse(chatID, "Error retrieving pending requests.")
+		return
+	}
 	
 	if len(pending) == 0 {
 		b.sendResponse(chatID, "No pending requests.")
