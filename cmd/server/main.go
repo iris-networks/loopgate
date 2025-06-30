@@ -8,6 +8,7 @@ import (
 	"loopgate/internal/mcp"
 	"loopgate/internal/router"
 	"loopgate/internal/session"
+	"loopgate/internal/storage" // Added storage import
 	"loopgate/internal/telegram"
 	"net/http"
 	"os"
@@ -23,7 +24,47 @@ func main() {
 		log.Fatal("TELEGRAM_BOT_TOKEN environment variable is required")
 	}
 
-	sessionManager := session.NewManager()
+	// Initialize storage adapter based on configuration
+	var storageAdapter storage.StorageAdapter
+	var err error
+	var closer func() // To store the Close function for database adapters
+
+	switch cfg.StorageAdapter {
+	case "inmemory":
+		storageAdapter = storage.NewInMemoryStorageAdapter()
+		log.Println("Using in-memory storage adapter")
+	case "postgres":
+		pgAdapter, pgErr := storage.NewPostgreSQLStorageAdapter(cfg.PostgresDSN)
+		if pgErr != nil {
+			log.Fatalf("Failed to initialize PostgreSQL storage adapter: %v", pgErr)
+		}
+		storageAdapter = pgAdapter
+		closer = func() {
+			log.Println("Closing PostgreSQL connection...")
+			if err := pgAdapter.Close(); err != nil {
+				log.Printf("Error closing PostgreSQL connection: %v", err)
+			}
+		}
+		log.Println("Using PostgreSQL storage adapter")
+	case "sqlite":
+		sqliteAdapter, sqliteErr := storage.NewSQLiteStorageAdapter(cfg.SQLiteDSN)
+		if sqliteErr != nil {
+			log.Fatalf("Failed to initialize SQLite storage adapter: %v", sqliteErr)
+		}
+		storageAdapter = sqliteAdapter
+		closer = func() {
+			log.Println("Closing SQLite connection...")
+			if err := sqliteAdapter.Close(); err != nil {
+				log.Printf("Error closing SQLite connection: %v", err)
+			}
+		}
+		log.Println("Using SQLite storage adapter")
+	default:
+		log.Fatalf("Invalid storage adapter configured: %s", cfg.StorageAdapter)
+	}
+
+	// Initialize session manager with the chosen adapter
+	sessionManager := session.NewManager(storageAdapter)
 
 	telegramBot, err := telegram.NewBot(cfg.TelegramBotToken, sessionManager)
 	if err != nil {
@@ -62,6 +103,11 @@ func main() {
 
 	if err := server.Shutdown(ctx); err != nil {
 		log.Printf("Server forced to shutdown: %v", err)
+	}
+
+	// Close the database connection if a closer function was set
+	if closer != nil {
+		closer()
 	}
 
 	log.Println("Server exited")
