@@ -30,4 +30,7 @@ deps:
 docker-build:
 	docker build -t $(BINARY_NAME):latest .
 
+docker-compose:
+	docker-compose up -d
+
 .DEFAULT_GOAL := build

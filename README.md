@@ -67,7 +67,53 @@ export SERVER_PORT=8080
 make run
 ```
 
+### Using PostgreSQL with Docker
+
+If you prefer to use PostgreSQL as the database, you can use the provided Docker Compose setup.
+
+1.  **Start PostgreSQL:**
+
+    ```bash
+    make docker-compose
+    ```
+
+2.  **Configure Environment Variables:**
+
+    Update your environment variables to use the PostgreSQL database.
+
+    ```bash
+    export DB_ADAPTER=postgres
+    export DB_URI="host=localhost port=5432 user=loopgate password=loopgate dbname=loopgate sslmode=disable"
+    ```
+
+3.  **Run the server:**
+
+    ```bash
+    make run
+    ```
+
 ### 2. Register Your AI Agent Session
+
+### Testing the Human-in-the-Loop Flow
+
+We've included an example HTTP client that you can use to test the entire HITL flow.
+
+1.  **Start the server:**
+
+    ```bash
+    make run
+    ```
+
+2.  **Run the example client:**
+
+    In a new terminal, run the following command. Make sure to replace `123456789` with your actual Telegram user ID. You can get your Telegram user ID by talking to the `@userinfobot` bot on Telegram.
+
+    ```bash
+    go run examples/http_client_example.go
+    ```
+
+    You should see output indicating that a session has been registered and a request has been submitted. You will then receive a message on Telegram asking for your input. After you respond, you will see the client print the result.
+
 
 ```bash
 curl -X POST http://localhost:8080/hitl/register \
