@@ -30,8 +30,8 @@ func Load() *Config {
 		LogLevel:              getEnv("LOG_LEVEL", "info"),
 		RequestTimeout:        getEnvInt("REQUEST_TIMEOUT", 300),
 		MaxConcurrentRequests: getEnvInt("MAX_CONCURRENT_REQUESTS", 100),
-		StorageAdapter:        getEnv("STORAGE_ADAPTER", "sqlite"), // Default to SQLite
-		PostgresDSN:           getEnv("POSTGRES_DSN", ""),          // e.g., "host=localhost user=user password=pass dbname=loopgate port=5432 sslmode=disable"
+		StorageAdapter:        getEnv("STORAGE_ADAPTER", "postgres"), // Default to SQLite
+		PostgresDSN:           getEnv("POSTGRES_DSN", "host=localhost user=postgres password=postgres dbname=loopgate port=5432 sslmode=disable"),          // e.g., "host=localhost user=user password=pass dbname=loopgate port=5432 sslmode=disable"
 		SQLiteDSN:             getEnv("SQLITE_DSN", "loopgate.db"), // Default to a local file "loopgate.db"
 	}
 

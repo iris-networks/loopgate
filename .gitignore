@@ -37,3 +37,4 @@ coverage.out
 
 # Logs
 *.log
+*.db
