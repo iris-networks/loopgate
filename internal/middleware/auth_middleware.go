@@ -9,7 +9,6 @@ import (
 
 	"loopgate/internal/auth"
 	"loopgate/internal/storage"
-	"loopgate/internal/types"
 )
 
 type contextKey string

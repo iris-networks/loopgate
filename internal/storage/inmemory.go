@@ -5,12 +5,17 @@ import (
 	"loopgate/internal/types"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // InMemoryStorageAdapter implements the StorageAdapter interface for in-memory storage.
 type InMemoryStorageAdapter struct {
 	sessions         map[string]*types.Session
 	requests         map[string]*types.HITLRequest
+	users            map[string]*types.User // username -> user
+	usersByID        map[uuid.UUID]*types.User
+	apiKeys          map[string]*types.APIKey // key hash -> key
 	clientToTelegram map[string]int64
 	mu               sync.RWMutex
 }
@@ -20,6 +25,9 @@ func NewInMemoryStorageAdapter() *InMemoryStorageAdapter {
 	return &InMemoryStorageAdapter{
 		sessions:         make(map[string]*types.Session),
 		requests:         make(map[string]*types.HITLRequest),
+		users:            make(map[string]*types.User),
+		usersByID:        make(map[uuid.UUID]*types.User),
+		apiKeys:          make(map[string]*types.APIKey),
 		clientToTelegram: make(map[string]int64),
 	}
 }
@@ -166,4 +174,106 @@ func (s *InMemoryStorageAdapter) GetActiveSessions() ([]*types.Session, error) {
 		}
 	}
 	return active, nil
+}
+
+// --- User management methods ---
+
+func (s *InMemoryStorageAdapter) CreateUser(user *types.User) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.users[user.Username]; exists {
+		return errors.New("user already exists")
+	}
+	s.users[user.Username] = user
+	s.usersByID[user.ID] = user
+	return nil
+}
+
+func (s *InMemoryStorageAdapter) GetUserByUsername(username string) (*types.User, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	user, exists := s.users[username]
+	if !exists {
+		return nil, errors.New("user not found")
+	}
+	return user, nil
+}
+
+func (s *InMemoryStorageAdapter) GetUserByID(userID uuid.UUID) (*types.User, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	user, exists := s.usersByID[userID]
+	if !exists {
+		return nil, errors.New("user not found")
+	}
+	return user, nil
+}
+
+// --- APIKey management methods ---
+
+func (s *InMemoryStorageAdapter) CreateAPIKey(apiKey *types.APIKey) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.apiKeys[apiKey.KeyHash]; exists {
+		return errors.New("API key already exists")
+	}
+	s.apiKeys[apiKey.KeyHash] = apiKey
+	return nil
+}
+
+func (s *InMemoryStorageAdapter) GetAPIKeyByHash(keyHash string) (*types.APIKey, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	apiKey, exists := s.apiKeys[keyHash]
+	if !exists {
+		return nil, errors.New("api key not found")
+	}
+	return apiKey, nil
+}
+
+func (s *InMemoryStorageAdapter) GetActiveAPIKeyByHash(keyHash string) (*types.APIKey, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	apiKey, exists := s.apiKeys[keyHash]
+	if !exists || !apiKey.IsActive {
+		return nil, errors.New("active api key not found")
+	}
+	return apiKey, nil
+}
+
+func (s *InMemoryStorageAdapter) GetAPIKeysByUserID(userID uuid.UUID) ([]*types.APIKey, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var userKeys []*types.APIKey
+	for _, apiKey := range s.apiKeys {
+		if apiKey.UserID == userID {
+			userKeys = append(userKeys, apiKey)
+		}
+	}
+	return userKeys, nil
+}
+
+func (s *InMemoryStorageAdapter) RevokeAPIKey(apiKeyID uuid.UUID, userID uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, apiKey := range s.apiKeys {
+		if apiKey.ID == apiKeyID && apiKey.UserID == userID {
+			apiKey.IsActive = false
+			return nil
+		}
+	}
+	return errors.New("api key not found or not owned by user")
+}
+
+func (s *InMemoryStorageAdapter) UpdateAPIKeyLastUsed(apiKeyID uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, apiKey := range s.apiKeys {
+		if apiKey.ID == apiKeyID {
+			now := time.Now()
+			apiKey.LastUsedAt = &now
+			return nil
+		}
+	}
+	return errors.New("api key not found")
 }
