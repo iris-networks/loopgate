@@ -75,7 +75,8 @@ func main() {
 
 	mcpServer := mcp.NewServer()
 	hitlHandler := handlers.NewHITLHandler(sessionManager, telegramBot)
-	appRouter := router.NewRouter(mcpServer, hitlHandler)
+	// Pass storageAdapter and cfg to NewRouter
+	appRouter := router.NewRouter(mcpServer, hitlHandler, storageAdapter, cfg)
 
 	server := &http.Server{
 		Addr:         ":" + cfg.ServerPort,

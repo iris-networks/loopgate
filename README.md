@@ -168,6 +168,122 @@ while True:
     time.sleep(5)
 ```
 
+### 4. User Account and API Key Management (New)
+
+Loopgate now supports user accounts and API key generation for securing access to its services. Here's how to interact with these new endpoints using `curl`:
+
+**a. Register a New User**
+
+```bash
+curl -X POST http://localhost:8080/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "testuser",
+    "password": "SecurePassword123!"
+  }'
+# Expected response (201 Created):
+# {
+#   "message": "User registered successfully",
+#   "user_id": "<user_uuid>"
+# }
+```
+
+**b. Login as a User**
+
+This will return a JWT (JSON Web Token) needed for API key management.
+
+```bash
+curl -X POST http://localhost:8080/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "testuser",
+    "password": "SecurePassword123!"
+  }'
+# Expected response (200 OK):
+# {
+#   "token": "<YOUR_JWT_TOKEN>",
+#   "user_id": "<user_uuid>",
+#   "username": "testuser"
+# }
+```
+**Note:** Copy the `token` value. You'll need it for the next steps.
+
+**c. Create an API Key**
+
+Replace `<YOUR_JWT_TOKEN>` with the token obtained from the login step.
+
+```bash
+export JWT_TOKEN="<YOUR_JWT_TOKEN>" # Store your JWT in an environment variable
+
+curl -X POST http://localhost:8080/api/user/apikeys \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $JWT_TOKEN" \
+  -d '{
+    "label": "My Test Key"
+  }'
+# Expected response (201 Created):
+# {
+#   "id": "<api_key_uuid>",
+#   "raw_key": "lk_pub_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", # Store this securely!
+#   "label": "My Test Key",
+#   "prefix": "lk_pub_",
+#   "expires_at": null,
+#   "created_at": "YYYY-MM-DDTHH:MM:SSZ"
+# }
+```
+**Important:** The `raw_key` is shown **only once**. Make sure to save it immediately and securely.
+
+**d. List API Keys**
+
+```bash
+curl -X GET http://localhost:8080/api/user/apikeys \
+  -H "Authorization: Bearer $JWT_TOKEN"
+# Expected response (200 OK):
+# [
+#   {
+#     "id": "<api_key_uuid>",
+#     "label": "My Test Key",
+#     "prefix": "lk_pub_",
+#     "last_used_at": null,
+#     "expires_at": null,
+#     "created_at": "YYYY-MM-DDTHH:MM:SSZ",
+#     "is_active": true
+#   }
+# ]
+```
+
+**e. Revoke an API Key**
+
+Replace `<API_KEY_ID_TO_REVOKE>` with the `id` of the key you want to revoke (from the list or create response).
+
+```bash
+export API_KEY_ID_TO_REVOKE="<api_key_uuid>"
+
+curl -X DELETE http://localhost:8080/api/user/apikeys/$API_KEY_ID_TO_REVOKE \
+  -H "Authorization: Bearer $JWT_TOKEN"
+# Expected response (200 OK):
+# {
+#   "message": "API key revoked successfully"
+# }
+```
+
+**f. Using an API Key**
+
+Once you have a `raw_key`, you can use it to authenticate requests to API key-protected endpoints (specific endpoints TBD or configured by admin).
+
+```bash
+export MY_API_KEY="<YOUR_RAW_API_KEY>" # e.g., lk_pub_xxxxxxxx...
+
+# Example: Accessing a hypothetical protected endpoint
+curl -X GET http://localhost:8080/api/saas/some-data \
+  -H "Authorization: Bearer $MY_API_KEY"
+# or
+curl -X GET http://localhost:8080/api/saas/some-data \
+  -H "X-API-Key: $MY_API_KEY"
+```
+
+For more details on these API endpoints, see the [API Reference](docs/API.md).
+
 ## 🌟 Key Features
 
 | Feature | Description |

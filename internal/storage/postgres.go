@@ -5,6 +5,7 @@ import (
 	"loopgate/internal/types"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -23,7 +24,7 @@ func NewPostgreSQLStorageAdapter(dsn string) (*PostgreSQLStorageAdapter, error) 
 	}
 
 	// Auto-migrate schema
-	err = db.AutoMigrate(&types.Session{}, &types.HITLRequest{})
+	err = db.AutoMigrate(&types.Session{}, &types.HITLRequest{}, &types.User{}, &types.APIKey{})
 	if err != nil {
 		// Attempt to close connection if migration fails
 		sqlDB, _ := db.DB()
@@ -145,4 +146,119 @@ func (s *PostgreSQLStorageAdapter) Close() error {
 		return err
 	}
 	return sqlDB.Close()
+}
+
+// --- User management methods ---
+
+// CreateUser creates a new user.
+func (s *PostgreSQLStorageAdapter) CreateUser(user *types.User) error {
+	// Ensure UUID is generated if not already set (GORM typically handles this with BeforeCreate hooks if configured,
+	// but explicit generation here is safer if no such hooks are in place for UUIDs specifically).
+	if user.ID == uuid.Nil {
+		user.ID = uuid.New()
+	}
+	user.CreatedAt = time.Now()
+	user.UpdatedAt = time.Now()
+	return s.db.Create(user).Error
+}
+
+// GetUserByUsername retrieves a user by their username.
+func (s *PostgreSQLStorageAdapter) GetUserByUsername(username string) (*types.User, error) {
+	var user types.User
+	err := s.db.Where("username = ?", username).First(&user).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("user not found")
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
+// GetUserByID retrieves a user by their ID.
+func (s *PostgreSQLStorageAdapter) GetUserByID(userID uuid.UUID) (*types.User, error) {
+	var user types.User
+	err := s.db.First(&user, "id = ?", userID).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("user not found")
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
+// --- APIKey management methods ---
+
+// CreateAPIKey creates a new API key.
+func (s *PostgreSQLStorageAdapter) CreateAPIKey(apiKey *types.APIKey) error {
+	if apiKey.ID == uuid.Nil {
+		apiKey.ID = uuid.New()
+	}
+	apiKey.CreatedAt = time.Now()
+	apiKey.IsActive = true // Ensure it's active by default
+	return s.db.Create(apiKey).Error
+}
+
+// GetAPIKeyByHash retrieves an API key by its hash.
+func (s *PostgreSQLStorageAdapter) GetAPIKeyByHash(keyHash string) (*types.APIKey, error) {
+	var apiKey types.APIKey
+	// Preload User information if needed, though not strictly necessary for all key lookups.
+	// err := s.db.Preload("User").Where("key_hash = ?", keyHash).First(&apiKey).Error
+	err := s.db.Where("key_hash = ?", keyHash).First(&apiKey).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("api key not found")
+		}
+		return nil, err
+	}
+	return &apiKey, nil
+}
+
+// GetActiveAPIKeyByHash retrieves an active API key by its hash.
+func (s *PostgreSQLStorageAdapter) GetActiveAPIKeyByHash(keyHash string) (*types.APIKey, error) {
+	var apiKey types.APIKey
+	err := s.db.Where("key_hash = ? AND is_active = ?", keyHash, true).First(&apiKey).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("active api key not found")
+		}
+		return nil, err
+	}
+	return &apiKey, nil
+}
+
+// GetAPIKeysByUserID retrieves all API keys for a given user ID.
+// It preloads the User information for each key.
+func (s *PostgreSQLStorageAdapter) GetAPIKeysByUserID(userID uuid.UUID) ([]*types.APIKey, error) {
+	var apiKeys []*types.APIKey
+	// We only want to show non-sensitive fields for listing typically, but the full struct is fetched here.
+	// The handler should be responsible for filtering what's returned to the user.
+	err := s.db.Where("user_id = ?", userID).Find(&apiKeys).Error
+	if err != nil {
+		return nil, err
+	}
+	return apiKeys, nil
+}
+
+// RevokeAPIKey marks an API key as inactive. It ensures the key belongs to the user.
+func (s *PostgreSQLStorageAdapter) RevokeAPIKey(apiKeyID uuid.UUID, userID uuid.UUID) error {
+	// Find the key first to ensure it belongs to the user trying to revoke it.
+	var apiKey types.APIKey
+	err := s.db.First(&apiKey, "id = ? AND user_id = ?", apiKeyID, userID).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New("api key not found or not owned by user")
+		}
+		return err
+	}
+
+	// Mark as inactive
+	return s.db.Model(&apiKey).Update("is_active", false).Error
+}
+
+// UpdateAPIKeyLastUsed updates the last used timestamp for an API key.
+func (s *PostgreSQLStorageAdapter) UpdateAPIKeyLastUsed(apiKeyID uuid.UUID) error {
+	now := time.Now()
+	return s.db.Model(&types.APIKey{}).Where("id = ?", apiKeyID).Update("last_used_at", &now).Error
 }
