@@ -2,6 +2,8 @@ package types
 
 import (
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type RequestType string
@@ -117,4 +119,37 @@ type MCPInitializeResult struct {
 	ProtocolVersion string          `json:"protocolVersion"`
 	Capabilities    MCPCapabilities `json:"capabilities"`
 	ServerInfo      MCPServerInfo   `json:"serverInfo"`
+}
+
+// User represents a user account in the system.
+type User struct {
+	ID           uuid.UUID `json:"id" gorm:"type:uuid;primary_key;"`
+	Username     string    `json:"username" gorm:"uniqueIndex;not null;size:255"`
+	PasswordHash string    `json:"-" gorm:"not null"` // Avoid exposing password hash in JSON
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// APIKey represents an API key associated with a user.
+type APIKey struct {
+	ID         uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;"`
+	KeyHash    string     `json:"-" gorm:"uniqueIndex;not null"` // Store hash of the key, not the key itself
+	UserID     uuid.UUID  `json:"user_id" gorm:"type:uuid;not null"`
+	User       User       `json:"-" gorm:"foreignKey:UserID;references:ID"` // GORM relation
+	Label      string     `json:"label" gorm:"size:255"`
+	Prefix     string     `json:"prefix" gorm:"size:10;not null"` // e.g., "lk_pub_" for quick identification
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	IsActive   bool       `json:"is_active" gorm:"default:true;not null"`
+}
+
+// Claims represents the JWT claims, embedding jwt.RegisteredClaims for standard fields.
+type Claims struct {
+	UserID   uuid.UUID `json:"user_id"`
+	Username string    `json:"username"`
+	// In the actual JWT implementation, we'll embed jwt.RegisteredClaims
+	// For now, this type definition is a placeholder for structure.
+	// e.g. StandardClaims jwt.RegisteredClaims `json:"standard_claims"`
+	RegisteredClaims interface{} `json:"registered_claims,omitempty"`
 }

@@ -17,6 +17,8 @@ type Config struct {
 	StorageAdapter        string // "inmemory", "postgres", "sqlite"
 	PostgresDSN           string // Data Source Name for PostgreSQL
 	SQLiteDSN             string // Data Source Name for SQLite (e.g., "loopgate.db" or "file::memory:?cache=shared")
+	JWTSecretKey          string // Secret key for signing JWTs
+	APIKeyPrefix          string // Prefix for generated API keys (e.g., "lk_pub_")
 }
 
 func Load() *Config {
@@ -30,10 +32,17 @@ func Load() *Config {
 		LogLevel:              getEnv("LOG_LEVEL", "info"),
 		RequestTimeout:        getEnvInt("REQUEST_TIMEOUT", 300),
 		MaxConcurrentRequests: getEnvInt("MAX_CONCURRENT_REQUESTS", 100),
-		StorageAdapter:        getEnv("STORAGE_ADAPTER", "postgres"), // Default to SQLite
-		PostgresDSN:           getEnv("POSTGRES_DSN", "host=localhost user=postgres password=postgres dbname=loopgate port=5432 sslmode=disable"),          // e.g., "host=localhost user=user password=pass dbname=loopgate port=5432 sslmode=disable"
+		StorageAdapter:        getEnv("STORAGE_ADAPTER", "postgres"), // Default to postgres
+		PostgresDSN:           getEnv("POSTGRES_DSN", "host=localhost user=loopgate password=loopgate dbname=loopgate port=5432 sslmode=disable"),
 		SQLiteDSN:             getEnv("SQLITE_DSN", "loopgate.db"), // Default to a local file "loopgate.db"
+		JWTSecretKey:          getEnv("JWT_SECRET_KEY", "your-super-secret-and-long-jwt-key"),       // IMPORTANT: Change this in production!
+		APIKeyPrefix:          getEnv("API_KEY_PREFIX", "lk_pub_"),    // Default API key prefix
 	}
+
+	if cfg.JWTSecretKey == "your-super-secret-and-long-jwt-key" {
+		log.Println("WARNING: JWT_SECRET_KEY is set to its default value. This is insecure and should be changed for production.")
+	}
+
 
 	// Validate storage adapter choice
 	switch cfg.StorageAdapter {
